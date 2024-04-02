@@ -16,13 +16,21 @@
 
 package vm
 
+/*
+#cgo LDFLAGS: -L./stark/target/release -lstark_verifier
+#include <stdlib.h>
+typedef struct {
+    const unsigned char* ptr;
+    unsigned long len;
+} VariableLengthArray;
+extern unsigned short verify(unsigned char a[32], VariableLengthArray b);
+*/
+import "C"
 import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"math/big"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -32,6 +40,8 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/params"
 	"golang.org/x/crypto/ripemd160"
+	"math/big"
+	"unsafe"
 )
 
 // PrecompiledContract is the basic interface for native Go contracts. The implementation
@@ -105,6 +115,7 @@ var PrecompiledContractsCancun = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{8}):    &bn256PairingIstanbul{},
 	common.BytesToAddress([]byte{9}):    &blake2F{},
 	common.BytesToAddress([]byte{0x0a}): &kzgPointEvaluation{},
+	common.BytesToAddress([]byte{0xff}): &starkVerify{},
 }
 
 // PrecompiledContractsBLS contains the set of pre-compiled Ethereum
@@ -176,6 +187,42 @@ func RunPrecompiledContract(p PrecompiledContract, input []byte, suppliedGas uin
 	suppliedGas -= gasCost
 	output, err := p.Run(input)
 	return output, suppliedGas, err
+}
+
+type starkVerify struct{}
+
+func (c *starkVerify) RequiredGas(input []byte) uint64 {
+	return uint64(1024)
+}
+
+func (c *starkVerify) Run(input []byte) ([]byte, error) {
+	var (
+		imageID = common.RightPadBytes(getData(input, 0, 32), 32)
+	)
+	if len(input) > 32 {
+		input = input[32:]
+	} else {
+		input = input[:0]
+	}
+	// link := string(input)
+	// data, err := os.ReadFile(link)
+	//if err != nil {
+	//	return nil, fmt.Errorf("couldn't read data: %w", err)
+	//}
+	var imageId [32]byte
+	copy(imageId[:], imageID)
+
+	varArray := C.VariableLengthArray{
+		ptr: (*C.uchar)(unsafe.Pointer(&input[0])),
+		len: C.ulong(len(input)),
+	}
+
+	var success C.ushort = C.verify((*C.uchar)(unsafe.Pointer(&imageID[0])), varArray)
+	fmt.Println(success)
+
+	output := make([]byte, 1)
+	output[0] = byte(success)
+	return output, nil
 }
 
 // ECRECOVER implemented as a native contract.
