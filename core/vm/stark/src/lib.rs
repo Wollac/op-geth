@@ -4,23 +4,25 @@ pub struct VariableLengthArray {
     len: usize,     // Length of the array
 }
 
+/// Verifies a receipt for a given image_id.
+/// Returns 0 if the receipt is valid, 1 if the receipt did not deserialize, 2 if the receipt did not verify.
 #[no_mangle]
-pub extern "C" fn verify(image_id: *const [u8; 32], receipt: VariableLengthArray) -> u16 {
+pub extern "C" fn verify(image_id: *const [u8; 32], receipt: VariableLengthArray) -> u8 {
     let image_id: &[u8; 32] = unsafe {
         assert!(!image_id.is_null(), "Pointer must not be null");
-        // Dereference the raw pointer to access the array. This is safe only if the above
-        // conditions are met.
         &*image_id
     };
-
-    let receipt: &[u8] = unsafe {
+    let receipt_bytes: &[u8] = unsafe {
         assert!(!receipt.ptr.is_null(), "Pointer must not be null");
         std::slice::from_raw_parts(receipt.ptr, receipt.len)
     };
 
-    let receipt: risc0_zkvm::Receipt = bincode::deserialize(receipt).unwrap();
+    let receipt: risc0_zkvm::Receipt = match bincode::deserialize(receipt_bytes) {
+        Ok(receipt) => receipt,
+        Err(_) => return 1,
+    };
     match receipt.verify(*image_id) {
-        Ok(_) => return 1,
-        Err(_) => return 0,
+        Ok(_) => return 0,
+        Err(_) => return 2,
     }
 }

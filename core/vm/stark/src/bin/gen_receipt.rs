@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "generate")]
+
 use hello_world_methods::{MULTIPLY_ELF, MULTIPLY_ID};
 use risc0_zkvm::{get_prover_server, sha::Digest, ExecutorEnv, InnerReceipt, ProverOpts, Receipt};
 

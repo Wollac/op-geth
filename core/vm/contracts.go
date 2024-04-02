@@ -21,9 +21,9 @@ package vm
 #include <stdlib.h>
 typedef struct {
     const unsigned char* ptr;
-    unsigned long len;
+    size_t len;
 } VariableLengthArray;
-extern unsigned short verify(unsigned char a[32], VariableLengthArray b);
+extern unsigned char verify(unsigned char a[32], VariableLengthArray b);
 */
 import "C"
 import (
@@ -31,6 +31,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/big"
+	"os"
+	"unsafe"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -40,9 +44,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/params"
 	"golang.org/x/crypto/ripemd160"
-	"math/big"
-	"os"
-	"unsafe"
 )
 
 // PrecompiledContract is the basic interface for native Go contracts. The implementation
@@ -190,6 +191,12 @@ func RunPrecompiledContract(p PrecompiledContract, input []byte, suppliedGas uin
 	return output, suppliedGas, err
 }
 
+var (
+	errReceiptNotFound        = errors.New("receipt not found")
+	errInvalidReceipt         = errors.New("invalid receipt")
+	errReceiptDoesNotValidate = errors.New("receipt does not validate")
+)
+
 type starkVerify struct{}
 
 func (c *starkVerify) RequiredGas(input []byte) uint64 {
@@ -208,22 +215,24 @@ func (c *starkVerify) Run(input []byte) ([]byte, error) {
 	// link := string(input)
 	data, err := os.ReadFile("stark/receipt.bin")
 	if err != nil {
-		return nil, fmt.Errorf("couldn't read data: %w", err)
+		return nil, errReceiptNotFound
 	}
-	// var imageId [32]byte
-	// copy(imageId[:], imageID)
 
 	varArray := C.VariableLengthArray{
 		ptr: (*C.uchar)(unsafe.Pointer(&data[0])),
-		len: C.ulong(len(data)),
+		len: C.size_t(len(data)),
 	}
 
-	var success C.ushort = C.verify((*C.uchar)(unsafe.Pointer(&imageID[0])), varArray)
-	fmt.Println(success)
-
-	output := make([]byte, 1)
-	output[0] = byte(success)
-	return output, nil
+	var errorCode C.uchar = C.verify((*C.uchar)(unsafe.Pointer(&imageID[0])), varArray)
+	switch errorCode {
+	case 0:
+		return []byte{}, nil
+	case 1:
+		return nil, errInvalidReceipt
+	case 2:
+		return nil, errReceiptDoesNotValidate
+	}
+	panic("unreachable")
 }
 
 // ECRECOVER implemented as a native contract.
