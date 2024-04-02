@@ -18,6 +18,7 @@ package vm
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -74,7 +75,14 @@ var allPrecompiles = map[common.Address]PrecompiledContract{
 func TestStarkVerify_Run(t *testing.T) {
 	p := &starkVerify{}
 
-	input := make([]byte, 33)
+	input := make([]byte, 32)
+
+	hexStr := "985a0f7f56a122e2e670c241cc2f294f23122bb566fd7374db9e4011d2e7ad87"
+	imageID, err := hex.DecodeString(hexStr)
+	if err != nil {
+		t.Fatal("Error decoding imageID string")
+	}
+	copy(input[:], imageID)
 	res, err := p.Run(input)
 	if err != nil {
 		t.Fatal(err)

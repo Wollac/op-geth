@@ -9,4 +9,6 @@ crate-type = ["staticlib"]
 
 [dependencies]
 bincode = "1.3"
-risc0-zkvm = "0.21"
+hex = "0.4"
+risc0-zkvm = { version = "0.21", features = ["prove"] }
+hello-world-methods = { path = "methods" }

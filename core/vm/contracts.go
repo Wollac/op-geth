@@ -17,7 +17,7 @@
 package vm
 
 /*
-#cgo LDFLAGS: -L./stark/target/release -lstark_verifier
+#cgo LDFLAGS: -L./stark/target/release -lstark_verifier -ldl -lm
 #include <stdlib.h>
 typedef struct {
     const unsigned char* ptr;
@@ -41,6 +41,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"golang.org/x/crypto/ripemd160"
 	"math/big"
+	"os"
 	"unsafe"
 )
 
@@ -205,16 +206,16 @@ func (c *starkVerify) Run(input []byte) ([]byte, error) {
 		input = input[:0]
 	}
 	// link := string(input)
-	// data, err := os.ReadFile(link)
-	//if err != nil {
-	//	return nil, fmt.Errorf("couldn't read data: %w", err)
-	//}
-	var imageId [32]byte
-	copy(imageId[:], imageID)
+	data, err := os.ReadFile("stark/receipt.bin")
+	if err != nil {
+		return nil, fmt.Errorf("couldn't read data: %w", err)
+	}
+	// var imageId [32]byte
+	// copy(imageId[:], imageID)
 
 	varArray := C.VariableLengthArray{
-		ptr: (*C.uchar)(unsafe.Pointer(&input[0])),
-		len: C.ulong(len(input)),
+		ptr: (*C.uchar)(unsafe.Pointer(&data[0])),
+		len: C.ulong(len(data)),
 	}
 
 	var success C.ushort = C.verify((*C.uchar)(unsafe.Pointer(&imageID[0])), varArray)
