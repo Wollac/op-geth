@@ -29,6 +29,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"strings"
 	"unsafe"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -188,6 +189,8 @@ func RunPrecompiledContract(p PrecompiledContract, input []byte, suppliedGas uin
 	return output, suppliedGas, err
 }
 
+const MaxReceiptSize = 2 * 1024 * 1024 // 2MB
+
 var (
 	errReceiptNotFound        = errors.New("receipt not found")
 	errInvalidReceipt         = errors.New("invalid receipt")
@@ -201,9 +204,7 @@ func (c *starkVerify) RequiredGas(input []byte) uint64 {
 }
 
 func (c *starkVerify) Run(input []byte) ([]byte, error) {
-	var (
-		imageID = common.RightPadBytes(getData(input, 0, 32), 32)
-	)
+	imageID := common.RightPadBytes(getData(input, 0, 32), 32)
 	if len(input) > 32 {
 		input = input[32:]
 	} else {
@@ -211,15 +212,9 @@ func (c *starkVerify) Run(input []byte) ([]byte, error) {
 	}
 	receiptURI := string(input)
 
-	resp, err := http.Get("http://" + receiptURI)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		return nil, errReceiptNotFound
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
-	if err != nil || len(data) == 0 {
-		return nil, errReceiptNotFound
+	data, err := getReceipt(receiptURI)
+	if err != nil {
+		return nil, err
 	}
 
 	receipt := C.VarLengthArray{
@@ -227,7 +222,7 @@ func (c *starkVerify) Run(input []byte) ([]byte, error) {
 		len: C.size_t(len(data)),
 	}
 
-	var errorCode C.uint8_t = C.verify((*[32]C.uint8_t)(unsafe.Pointer(&imageID[0])), receipt)
+	errorCode := C.verify((*[32]C.uint8_t)(unsafe.Pointer(&imageID[0])), receipt)
 	switch errorCode {
 	case 0:
 		return common.LeftPadBytes([]byte{0x01}, 32), nil
@@ -235,8 +230,25 @@ func (c *starkVerify) Run(input []byte) ([]byte, error) {
 		return common.LeftPadBytes([]byte{0x00}, 32), nil
 	case 2:
 		return nil, errInvalidReceipt
+	default:
+		panic("unexpected error code")
 	}
-	panic("unreachable")
+}
+
+func getReceipt(receiptURI string) ([]byte, error) {
+	modifiedURI := strings.Replace(receiptURI, "da://", "http://da/", 1)
+	resp, err := http.Get(modifiedURI)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return nil, errReceiptNotFound
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, MaxReceiptSize))
+	if err != nil || len(data) == 0 {
+		return nil, errReceiptNotFound
+	}
+
+	return data, nil
 }
 
 // ECRECOVER implemented as a native contract.

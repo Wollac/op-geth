@@ -20,7 +20,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,6 +61,8 @@ var allPrecompiles = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{9}):    &blake2F{},
 	common.BytesToAddress([]byte{0x0a}): &kzgPointEvaluation{},
 
+	common.BytesToAddress([]byte{0x51}): &starkVerify{},
+
 	common.BytesToAddress([]byte{0x0f, 0x0a}): &bls12381G1Add{},
 	common.BytesToAddress([]byte{0x0f, 0x0b}): &bls12381G1Mul{},
 	common.BytesToAddress([]byte{0x0f, 0x0c}): &bls12381G1MultiExp{},
@@ -67,29 +72,6 @@ var allPrecompiles = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{0x0f, 0x10}): &bls12381Pairing{},
 	common.BytesToAddress([]byte{0x0f, 0x11}): &bls12381MapG1{},
 	common.BytesToAddress([]byte{0x0f, 0x12}): &bls12381MapG2{},
-
-	common.BytesToAddress([]byte{0x0f, 0xff}): &starkVerify{},
-}
-
-func TestStarkVerify_Run(t *testing.T) {
-	p := &starkVerify{}
-
-	imageID := common.Hex2Bytes("84291082d4ae4c51cb297c6d35b3f580a15de76de1d13e09b80a9826d4e5bc9c")
-	link := "172.21.0.3/receipt.bin"
-
-	input := make([]byte, 0, len(imageID)+len(link))
-	input = append(input, imageID...)
-	input = append(input, link...)
-
-	t.Logf("input: %x\n", input)
-
-	res, err := p.Run(input)
-	if err != nil {
-		t.Error(err)
-	}
-	if len(res) != 0 {
-		t.Error("wrong result")
-	}
 }
 
 // EIP-152 test vectors
@@ -296,6 +278,48 @@ func TestPrecompileBlake2FMalformedInput(t *testing.T) {
 }
 
 func TestPrecompiledEcrecover(t *testing.T) { testJson("ecRecover", "01", t) }
+
+func TestPrecompiledStarkVerify(t *testing.T) {
+	const (
+		imageID      = "84291082d4ae4c51cb297c6d35b3f580a15de76de1d13e09b80a9826d4e5bc9c"
+		testDataPath = "testdata/precompiles/starkVerify.bin"
+	)
+
+	// Load the receipt data
+	data, err := os.ReadFile(testDataPath)
+	if err != nil {
+		t.Fatalf("Failed to load test data from %s: %v", testDataPath, err)
+	}
+
+	// Setup a mock server to return the receipt data
+	testServer := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, _ *http.Request) {
+		res.WriteHeader(http.StatusOK)
+		res.Write(data)
+	}))
+	defer testServer.Close() // Clean up after the test
+
+	tests := []precompiledTest{
+		{
+			Name:     "valid receipt",
+			Input:    imageID + common.Bytes2Hex([]byte(testServer.URL)),
+			Gas:      1024,
+			Expected: "0000000000000000000000000000000000000000000000000000000000000001",
+		},
+		{
+			Name:     "invalid receipt",
+			Input:    strings.Repeat("00", 32) + common.Bytes2Hex([]byte(testServer.URL)),
+			Gas:      1024,
+			Expected: "0000000000000000000000000000000000000000000000000000000000000000",
+		},
+	}
+
+	// Execute each test case
+	for _, tc := range tests {
+		t.Run(tc.Name, func(t *testing.T) {
+			testPrecompiled("0x51", tc, t)
+		})
+	}
+}
 
 func testJson(name, addr string, t *testing.T) {
 	tests, err := loadJson(name)
