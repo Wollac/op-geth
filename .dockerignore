@@ -1,5 +1,8 @@
 **/*_test.go
 
+**/target/
+core/vm/lib/libstark_verifier.a
+
 build/_workspace
 build/_bin
 tests/testdata

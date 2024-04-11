@@ -17,13 +17,8 @@
 package vm
 
 /*
-#cgo LDFLAGS: -L./stark/target/release -lstark_verifier -ldl -lm
-#include <stdlib.h>
-typedef struct {
-    const unsigned char* ptr;
-    size_t len;
-} VariableLengthArray;
-extern unsigned char verify(unsigned char a[32], VariableLengthArray b);
+#cgo LDFLAGS: -L./lib -lstark_verifier -ldl -lm
+#include "./lib/stark_verifier.h"
 */
 import "C"
 import (
@@ -213,17 +208,17 @@ func (c *starkVerify) Run(input []byte) ([]byte, error) {
 		input = input[:0]
 	}
 	// link := string(input)
-	data, err := os.ReadFile("stark/receipt.bin")
+	data, err := os.ReadFile("lib/receipt.bin")
 	if err != nil {
 		return nil, errReceiptNotFound
 	}
 
-	varArray := C.VariableLengthArray{
-		ptr: (*C.uchar)(unsafe.Pointer(&data[0])),
+	receipt := C.VarLengthArray{
+		ptr: (*C.uint8_t)(unsafe.Pointer(&data[0])),
 		len: C.size_t(len(data)),
 	}
 
-	var errorCode C.uchar = C.verify((*C.uchar)(unsafe.Pointer(&imageID[0])), varArray)
+	var errorCode C.uint8_t = C.verify((*[32]C.uint8_t)(unsafe.Pointer(&imageID[0])), receipt)
 	switch errorCode {
 	case 0:
 		return []byte{}, nil

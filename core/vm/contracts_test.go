@@ -74,7 +74,7 @@ var allPrecompiles = map[common.Address]PrecompiledContract{
 func TestStarkVerify_Run(t *testing.T) {
 	p := &starkVerify{}
 
-	imageID := common.Hex2Bytes("bf256f78bd241a19461cebc1b45efe657a99ed0b38eebe355c9beec9b1049ea4")
+	imageID := common.Hex2Bytes("84291082d4ae4c51cb297c6d35b3f580a15de76de1d13e09b80a9826d4e5bc9c")
 	link := ""
 
 	input := make([]byte, 0, len(imageID)+len(link))

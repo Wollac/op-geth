@@ -13,4 +13,4 @@ risc0-zkvm = { version = "0.21", default-features = false }
 hello-world-methods = { path = "methods", optional = true}
 
 [features]
-generate = ["dep:hello-world-methods", "risc0-zkvm/prove"]
+generate = ["dep:hello-world-methods", "risc0-zkvm/default", "risc0-zkvm/prove"]

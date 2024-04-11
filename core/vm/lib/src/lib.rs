@@ -1,5 +1,5 @@
 #[repr(C)]
-pub struct VariableLengthArray {
+pub struct VarLengthArray {
     ptr: *const u8, // Pointer to the array data
     len: usize,     // Length of the array
 }
@@ -7,10 +7,10 @@ pub struct VariableLengthArray {
 /// Verifies a receipt for a given image_id.
 /// Returns 0 if the receipt is valid, 1 if the receipt did not deserialize, 2 if the receipt did not verify.
 #[no_mangle]
-pub extern "C" fn verify(image_id: *const [u8; 32], receipt: VariableLengthArray) -> u8 {
-    let image_id: &[u8; 32] = unsafe {
+pub extern "C" fn verify(image_id: *const [u8; 32], receipt: VarLengthArray) -> u8 {
+    let image_id: [u8; 32] = unsafe {
         assert!(!image_id.is_null(), "Pointer must not be null");
-        &*image_id
+        *image_id
     };
     let receipt_bytes: &[u8] = unsafe {
         assert!(!receipt.ptr.is_null(), "Pointer must not be null");
@@ -21,7 +21,7 @@ pub extern "C" fn verify(image_id: *const [u8; 32], receipt: VariableLengthArray
         Ok(receipt) => receipt,
         Err(_) => return 1,
     };
-    match receipt.verify(*image_id) {
+    match receipt.verify(image_id) {
         Ok(_) => return 0,
         Err(_) => return 2,
     }
