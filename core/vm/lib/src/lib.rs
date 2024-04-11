@@ -19,10 +19,17 @@ pub extern "C" fn verify(image_id: *const [u8; 32], receipt: VarLengthArray) -> 
 
     let receipt: risc0_zkvm::Receipt = match bincode::deserialize(receipt_bytes) {
         Ok(receipt) => receipt,
-        Err(_) => return 1,
+        Err(_) => return ErrorCode::DeserializeError as u8,
     };
     match receipt.verify(image_id) {
-        Ok(_) => return 0,
-        Err(_) => return 2,
+        Ok(_) => return ErrorCode::Ok as u8,
+        Err(_) => return ErrorCode::VerifyError as u8,
     }
+}
+
+#[repr(u8)]
+enum ErrorCode {
+    Ok = 0,
+    VerifyError = 1,
+    DeserializeError = 2,
 }

@@ -75,7 +75,7 @@ func TestStarkVerify_Run(t *testing.T) {
 	p := &starkVerify{}
 
 	imageID := common.Hex2Bytes("84291082d4ae4c51cb297c6d35b3f580a15de76de1d13e09b80a9826d4e5bc9c")
-	link := ""
+	link := "172.21.0.3/receipt.bin"
 
 	input := make([]byte, 0, len(imageID)+len(link))
 	input = append(input, imageID...)

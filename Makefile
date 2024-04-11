@@ -26,9 +26,7 @@ clean:
 	go clean -cache
 	rm -fr build/_workspace/pkg/ $(GOBIN)/*
 
-rustlib: core/vm/lib/libstark_verifier.a
-
-core/vm/lib/libstark_verifier.a:
+rustlib:
 	@cd core/vm/lib && cargo build --release --lib
 	@cp core/vm/lib/target/release/libstark_verifier.a core/vm/lib/libstark_verifier.a
 

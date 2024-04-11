@@ -26,8 +26,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
-	"os"
+	"net/http"
 	"unsafe"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -88,15 +89,16 @@ var PrecompiledContractsIstanbul = map[common.Address]PrecompiledContract{
 // PrecompiledContractsBerlin contains the default set of pre-compiled Ethereum
 // contracts used in the Berlin release.
 var PrecompiledContractsBerlin = map[common.Address]PrecompiledContract{
-	common.BytesToAddress([]byte{1}): &ecrecover{},
-	common.BytesToAddress([]byte{2}): &sha256hash{},
-	common.BytesToAddress([]byte{3}): &ripemd160hash{},
-	common.BytesToAddress([]byte{4}): &dataCopy{},
-	common.BytesToAddress([]byte{5}): &bigModExp{eip2565: true},
-	common.BytesToAddress([]byte{6}): &bn256AddIstanbul{},
-	common.BytesToAddress([]byte{7}): &bn256ScalarMulIstanbul{},
-	common.BytesToAddress([]byte{8}): &bn256PairingIstanbul{},
-	common.BytesToAddress([]byte{9}): &blake2F{},
+	common.BytesToAddress([]byte{1}):    &ecrecover{},
+	common.BytesToAddress([]byte{2}):    &sha256hash{},
+	common.BytesToAddress([]byte{3}):    &ripemd160hash{},
+	common.BytesToAddress([]byte{4}):    &dataCopy{},
+	common.BytesToAddress([]byte{5}):    &bigModExp{eip2565: true},
+	common.BytesToAddress([]byte{6}):    &bn256AddIstanbul{},
+	common.BytesToAddress([]byte{7}):    &bn256ScalarMulIstanbul{},
+	common.BytesToAddress([]byte{8}):    &bn256PairingIstanbul{},
+	common.BytesToAddress([]byte{9}):    &blake2F{},
+	common.BytesToAddress([]byte{0x51}): &starkVerify{},
 }
 
 // PrecompiledContractsCancun contains the default set of pre-compiled Ethereum
@@ -112,7 +114,7 @@ var PrecompiledContractsCancun = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{8}):    &bn256PairingIstanbul{},
 	common.BytesToAddress([]byte{9}):    &blake2F{},
 	common.BytesToAddress([]byte{0x0a}): &kzgPointEvaluation{},
-	common.BytesToAddress([]byte{0xff}): &starkVerify{},
+	common.BytesToAddress([]byte{0x51}): &starkVerify{},
 }
 
 // PrecompiledContractsBLS contains the set of pre-compiled Ethereum
@@ -207,9 +209,16 @@ func (c *starkVerify) Run(input []byte) ([]byte, error) {
 	} else {
 		input = input[:0]
 	}
-	// link := string(input)
-	data, err := os.ReadFile("lib/receipt.bin")
-	if err != nil {
+	receiptURI := string(input)
+
+	resp, err := http.Get("http://" + receiptURI)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return nil, errReceiptNotFound
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	if err != nil || len(data) == 0 {
 		return nil, errReceiptNotFound
 	}
 
@@ -221,11 +230,11 @@ func (c *starkVerify) Run(input []byte) ([]byte, error) {
 	var errorCode C.uint8_t = C.verify((*[32]C.uint8_t)(unsafe.Pointer(&imageID[0])), receipt)
 	switch errorCode {
 	case 0:
-		return []byte{}, nil
+		return common.LeftPadBytes([]byte{0x01}, 32), nil
 	case 1:
-		return nil, errInvalidReceipt
+		return common.LeftPadBytes([]byte{0x00}, 32), nil
 	case 2:
-		return nil, errReceiptDoesNotValidate
+		return nil, errInvalidReceipt
 	}
 	panic("unreachable")
 }
