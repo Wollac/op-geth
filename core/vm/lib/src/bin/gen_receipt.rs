@@ -14,8 +14,9 @@
 
 #![cfg(feature = "generate")]
 
-use hello_world_methods::{MULTIPLY_ELF, MULTIPLY_ID};
-use risc0_zkvm::{get_prover_server, sha::Digest, ExecutorEnv, InnerReceipt, ProverOpts, Receipt};
+use hello_world_methods::MULTIPLY_ELF;
+use risc0_zkvm::sha::Digestible;
+use risc0_zkvm::{get_prover_server, sha::Digest, ExecutorEnv, ProverOpts, SuccinctReceipt};
 
 fn main() {
     let iterations = 100;
@@ -28,20 +29,27 @@ fn main() {
     let receipt = prover.prove(env, MULTIPLY_ELF).unwrap();
     let composite_receipt = receipt.inner.composite().unwrap();
     let succinct_receipt = prover.compress(composite_receipt).unwrap();
-    let receipt = Receipt {
-        inner: InnerReceipt::Succinct(succinct_receipt),
-        journal: receipt.journal,
+
+    std::fs::write("seal.bin", succinct_receipt.get_seal_bytes()).unwrap();
+    let claim = succinct_receipt.claim;
+    println!("PreState:\t{}", claim.pre.digest());
+    println!("PostState:\t{}", claim.post.digest());
+    println!("Input:  \t{}", claim.input);
+    let journal = &claim.output.as_value().unwrap().as_ref().unwrap().journal;
+    println!("Journal:\t{}", journal.digest());
+
+    let seal_bytes = std::fs::read("seal.bin").unwrap();
+    let seal = seal_bytes
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+
+    let receipt = SuccinctReceipt {
+        seal,
+        control_id: Digest::ZERO,
+        claim,
     };
-    let receipt_bytes = bincode::serialize(&receipt).unwrap();
-
-    std::fs::write("receipt.bin", receipt_bytes).unwrap();
-    let image_id = Digest::from(MULTIPLY_ID);
-
-    println!("ImageID: {image_id}");
-
-    let receipt_bytes = std::fs::read("receipt.bin").unwrap();
-    let receipt: Receipt = bincode::deserialize(&receipt_bytes).unwrap();
-    receipt.verify(MULTIPLY_ID).unwrap();
+    receipt.verify_integrity().unwrap();
 
     println!("Receipt OK");
 }

@@ -20,8 +20,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -281,33 +279,29 @@ func TestPrecompiledEcrecover(t *testing.T) { testJson("ecRecover", "01", t) }
 
 func TestPrecompiledStarkVerify(t *testing.T) {
 	const (
-		imageID      = "84291082d4ae4c51cb297c6d35b3f580a15de76de1d13e09b80a9826d4e5bc9c"
+		preState     = "9def5fca26192918427b2f984f1f02571d4bad10dccca3ad238eedf9494d8682"
+		postState    = "2bc65f04e50703f236b71833701768fd8b92d23d97b97235af8df39f28ed9517"
+		input        = "0000000000000000000000000000000000000000000000000000000000000000"
+		journal      = "fb5e512425fc9449316ec95969ebe71e2d576dbab833d61e2a5b9330fd70ee02"
 		testDataPath = "testdata/precompiles/starkVerify.bin"
 	)
 
-	// Load the receipt data
-	data, err := os.ReadFile(testDataPath)
+	// Load the seal data
+	seal, err := os.ReadFile(testDataPath)
 	if err != nil {
 		t.Fatalf("Failed to load test data from %s: %v", testDataPath, err)
 	}
 
-	// Setup a mock server to return the receipt data
-	testServer := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, _ *http.Request) {
-		res.WriteHeader(http.StatusOK)
-		res.Write(data)
-	}))
-	defer testServer.Close() // Clean up after the test
-
 	tests := []precompiledTest{
 		{
 			Name:     "valid receipt",
-			Input:    imageID + common.Bytes2Hex([]byte(testServer.URL)),
+			Input:    preState + postState + input + journal + common.Bytes2Hex(seal),
 			Gas:      1024,
 			Expected: "0000000000000000000000000000000000000000000000000000000000000001",
 		},
 		{
 			Name:     "invalid receipt",
-			Input:    strings.Repeat("00", 32) + common.Bytes2Hex([]byte(testServer.URL)),
+			Input:    strings.Repeat("00", 32) + postState + input + journal + common.Bytes2Hex(seal),
 			Gas:      1024,
 			Expected: "0000000000000000000000000000000000000000000000000000000000000000",
 		},

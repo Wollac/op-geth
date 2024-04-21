@@ -26,10 +26,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"math/big"
-	"net/http"
-	"strings"
 	"unsafe"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -189,12 +186,11 @@ func RunPrecompiledContract(p PrecompiledContract, input []byte, suppliedGas uin
 	return output, suppliedGas, err
 }
 
-const MaxReceiptSize = 2 * 1024 * 1024 // 2MB
+const MinSealSize = 64
 
 var (
-	errReceiptNotFound        = errors.New("receipt not found")
-	errInvalidReceipt         = errors.New("invalid receipt")
-	errReceiptDoesNotValidate = errors.New("receipt does not validate")
+	errStarkInvalidInputLength = errors.New("invalid input length")
+	errStarkInvalidSeal        = errors.New("invalid seal")
 )
 
 type starkVerify struct{}
@@ -204,51 +200,39 @@ func (c *starkVerify) RequiredGas(input []byte) uint64 {
 }
 
 func (c *starkVerify) Run(input []byte) ([]byte, error) {
-	imageID := common.RightPadBytes(getData(input, 0, 32), 32)
-	if len(input) > 32 {
-		input = input[32:]
-	} else {
-		input = input[:0]
+	var (
+		preState      = getData(input, 0, 32)
+		postState     = getData(input, 32, 32)
+		inputDigest   = getData(input, 64, 32)
+		journalDigest = getData(input, 96, 32)
+	)
+	if len(input) < 128+MinSealSize {
+		return nil, errStarkInvalidInputLength
 	}
-	receiptURI := string(input)
+	input = input[128:]
 
-	data, err := getReceipt(receiptURI)
-	if err != nil {
-		return nil, err
-	}
-
-	receipt := C.VarLengthArray{
-		ptr: (*C.uint8_t)(unsafe.Pointer(&data[0])),
-		len: C.size_t(len(data)),
+	seal := C.VarLengthArray{
+		ptr: (*C.uint8_t)(unsafe.Pointer(&input[0])),
+		len: C.size_t(len(input)),
 	}
 
-	errorCode := C.verify((*[32]C.uint8_t)(unsafe.Pointer(&imageID[0])), receipt)
+	errorCode := C.verify(
+		(*[32]C.uint8_t)(unsafe.Pointer(&preState[0])),
+		(*[32]C.uint8_t)(unsafe.Pointer(&postState[0])),
+		(*[32]C.uint8_t)(unsafe.Pointer(&inputDigest[0])),
+		(*[32]C.uint8_t)(unsafe.Pointer(&journalDigest[0])),
+		seal,
+	)
 	switch errorCode {
 	case 0:
 		return common.LeftPadBytes([]byte{0x01}, 32), nil
 	case 1:
 		return common.LeftPadBytes([]byte{0x00}, 32), nil
 	case 2:
-		return nil, errInvalidReceipt
+		return nil, errStarkInvalidSeal
 	default:
 		panic("unexpected error code")
 	}
-}
-
-func getReceipt(receiptURI string) ([]byte, error) {
-	modifiedURI := strings.Replace(receiptURI, "da://", "http://da/", 1)
-	resp, err := http.Get(modifiedURI)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		return nil, errReceiptNotFound
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, MaxReceiptSize))
-	if err != nil || len(data) == 0 {
-		return nil, errReceiptNotFound
-	}
-
-	return data, nil
 }
 
 // ECRECOVER implemented as a native contract.

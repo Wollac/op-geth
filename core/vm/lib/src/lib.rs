@@ -1,35 +1,73 @@
+use risc0_zkvm::{sha::Digest, MaybePruned, Output, ReceiptClaim};
+
 #[repr(C)]
 pub struct VarLengthArray {
     ptr: *const u8, // Pointer to the array data
     len: usize,     // Length of the array
 }
 
-/// Verifies a receipt for a given image_id.
-/// Returns 0 if the receipt is valid, 1 if the receipt did not deserialize, 2 if the receipt did not verify.
+/// Verifies the given succinct proof.
 #[no_mangle]
-pub extern "C" fn verify(image_id: *const [u8; 32], receipt: VarLengthArray) -> u8 {
-    let image_id: [u8; 32] = unsafe {
-        assert!(!image_id.is_null(), "Pointer must not be null");
-        *image_id
+pub extern "C" fn verify(
+    pre_state: *const [u8; 32],
+    post_state: *const [u8; 32],
+    input: *const [u8; 32],
+    journal: *const [u8; 32],
+    seal: VarLengthArray,
+) -> ErrorCode {
+    let pre_state: [u8; 32] = unsafe {
+        assert!(!pre_state.is_null(), "Pointer must not be null");
+        *pre_state
     };
-    let receipt_bytes: &[u8] = unsafe {
-        assert!(!receipt.ptr.is_null(), "Pointer must not be null");
-        std::slice::from_raw_parts(receipt.ptr, receipt.len)
+    let post_state: [u8; 32] = unsafe {
+        assert!(!post_state.is_null(), "Pointer must not be null");
+        *post_state
+    };
+    let input: [u8; 32] = unsafe {
+        assert!(!input.is_null(), "Pointer must not be null");
+        *input
+    };
+    let journal: [u8; 32] = unsafe {
+        assert!(!journal.is_null(), "Pointer must not be null");
+        *journal
+    };
+    let seal: &[u8] = unsafe {
+        assert!(!seal.ptr.is_null(), "Pointer must not be null");
+        std::slice::from_raw_parts(seal.ptr, seal.len)
     };
 
-    let receipt: risc0_zkvm::Receipt = match bincode::deserialize(receipt_bytes) {
-        Ok(receipt) => receipt,
-        Err(_) => return ErrorCode::DeserializeError as u8,
+    if seal.len() % 4 != 0 {
+        return ErrorCode::InvalidSeal;
+    }
+    let seal = seal
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+
+    let receipt = risc0_zkvm::SuccinctReceipt {
+        seal,
+        claim: ReceiptClaim {
+            pre: MaybePruned::Pruned(pre_state.into()),
+            post: MaybePruned::Pruned(post_state.into()),
+            exit_code: risc0_zkvm::ExitCode::Halted(0),
+            input: input.into(),
+            output: MaybePruned::Value(Some(Output {
+                journal: MaybePruned::Pruned(journal.into()),
+                assumptions: MaybePruned::Pruned(Digest::ZERO),
+            })),
+        },
+        control_id: Digest::ZERO,
     };
-    match receipt.verify(image_id) {
-        Ok(_) => return ErrorCode::Ok as u8,
-        Err(_) => return ErrorCode::VerifyError as u8,
+
+    match receipt.verify_integrity() {
+        Ok(_) => return ErrorCode::Ok,
+        Err(_) => return ErrorCode::VerifyError,
     }
 }
 
 #[repr(u8)]
-enum ErrorCode {
+pub enum ErrorCode {
     Ok = 0,
     VerifyError = 1,
-    DeserializeError = 2,
+    InvalidSeal = 2,
 }

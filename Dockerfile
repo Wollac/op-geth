@@ -4,7 +4,7 @@ ARG VERSION=""
 ARG BUILDNUM=""
 
 # Build the Stark verifier in a Rust container
-FROM rust:1.75 AS rust-builder
+FROM rust:1.76 AS rust-builder
 ADD ./core/vm/lib /rustlib
 RUN cd /rustlib && cargo build --release --lib
 

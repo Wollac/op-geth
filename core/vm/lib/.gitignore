@@ -3,3 +3,4 @@ Cargo.lock
 
 libstark_verifier.a
 receipt.bin
+seal.bin
