@@ -2,13 +2,13 @@
 # with Go source code. If you know what GOPATH is then you probably
 # don't need to bother with make.
 
-.PHONY: geth android ios evm all test clean
+.PHONY: geth android ios evm all test clean rustlib
 
 GOBIN = ./build/bin
 GO ?= latest
 GORUN = go run
 
-geth:
+geth: rustlib
 	$(GORUN) build/ci.go install ./cmd/geth
 	@echo "Done building."
 	@echo "Run \"$(GOBIN)/geth\" to launch geth."
@@ -25,6 +25,11 @@ lint: ## Run linters.
 clean:
 	go clean -cache
 	rm -fr build/_workspace/pkg/ $(GOBIN)/*
+	cd core/vm/lib && cargo clean
+
+rustlib:
+	cd core/vm/lib && cargo build --release --locked --lib
+	@cp core/vm/lib/target/release/libstark_verifier.a core/vm/lib/libstark_verifier.a
 
 # The devtools target installs tools required for 'go generate'.
 # You need to put $GOBIN (or $GOPATH/bin) in your PATH to use 'go generate'.

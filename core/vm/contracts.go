@@ -16,12 +16,18 @@
 
 package vm
 
+/*
+#cgo LDFLAGS: -L./lib -lstark_verifier -ldl -lm
+#include "./lib/stark_verifier.h"
+*/
+import "C"
 import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/big"
+	"unsafe"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
@@ -81,15 +87,16 @@ var PrecompiledContractsIstanbul = map[common.Address]PrecompiledContract{
 // PrecompiledContractsBerlin contains the default set of pre-compiled Ethereum
 // contracts used in the Berlin release.
 var PrecompiledContractsBerlin = map[common.Address]PrecompiledContract{
-	common.BytesToAddress([]byte{1}): &ecrecover{},
-	common.BytesToAddress([]byte{2}): &sha256hash{},
-	common.BytesToAddress([]byte{3}): &ripemd160hash{},
-	common.BytesToAddress([]byte{4}): &dataCopy{},
-	common.BytesToAddress([]byte{5}): &bigModExp{eip2565: true},
-	common.BytesToAddress([]byte{6}): &bn256AddIstanbul{},
-	common.BytesToAddress([]byte{7}): &bn256ScalarMulIstanbul{},
-	common.BytesToAddress([]byte{8}): &bn256PairingIstanbul{},
-	common.BytesToAddress([]byte{9}): &blake2F{},
+	common.BytesToAddress([]byte{1}):    &ecrecover{},
+	common.BytesToAddress([]byte{2}):    &sha256hash{},
+	common.BytesToAddress([]byte{3}):    &ripemd160hash{},
+	common.BytesToAddress([]byte{4}):    &dataCopy{},
+	common.BytesToAddress([]byte{5}):    &bigModExp{eip2565: true},
+	common.BytesToAddress([]byte{6}):    &bn256AddIstanbul{},
+	common.BytesToAddress([]byte{7}):    &bn256ScalarMulIstanbul{},
+	common.BytesToAddress([]byte{8}):    &bn256PairingIstanbul{},
+	common.BytesToAddress([]byte{9}):    &blake2F{},
+	common.BytesToAddress([]byte{0x51}): &starkVerify{},
 }
 
 // PrecompiledContractsCancun contains the default set of pre-compiled Ethereum
@@ -105,6 +112,7 @@ var PrecompiledContractsCancun = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{8}):    &bn256PairingIstanbul{},
 	common.BytesToAddress([]byte{9}):    &blake2F{},
 	common.BytesToAddress([]byte{0x0a}): &kzgPointEvaluation{},
+	common.BytesToAddress([]byte{0x51}): &starkVerify{},
 }
 
 // PrecompiledContractsBLS contains the set of pre-compiled Ethereum
@@ -176,6 +184,55 @@ func RunPrecompiledContract(p PrecompiledContract, input []byte, suppliedGas uin
 	suppliedGas -= gasCost
 	output, err := p.Run(input)
 	return output, suppliedGas, err
+}
+
+const MinSealSize = 64
+
+var (
+	errStarkInvalidInputLength = errors.New("invalid input length")
+	errStarkInvalidSeal        = errors.New("invalid seal")
+)
+
+type starkVerify struct{}
+
+func (c *starkVerify) RequiredGas(input []byte) uint64 {
+	return uint64(1024)
+}
+
+func (c *starkVerify) Run(input []byte) ([]byte, error) {
+	var (
+		preState      = getData(input, 0, 32)
+		postState     = getData(input, 32, 32)
+		inputDigest   = getData(input, 64, 32)
+		journalDigest = getData(input, 96, 32)
+	)
+	if len(input) < 128+MinSealSize {
+		return nil, errStarkInvalidInputLength
+	}
+	input = input[128:]
+
+	seal := C.VarLengthArray{
+		ptr: (*C.uint8_t)(unsafe.Pointer(&input[0])),
+		len: C.size_t(len(input)),
+	}
+
+	errorCode := C.verify(
+		(*[32]C.uint8_t)(unsafe.Pointer(&preState[0])),
+		(*[32]C.uint8_t)(unsafe.Pointer(&postState[0])),
+		(*[32]C.uint8_t)(unsafe.Pointer(&inputDigest[0])),
+		(*[32]C.uint8_t)(unsafe.Pointer(&journalDigest[0])),
+		seal,
+	)
+	switch errorCode {
+	case 0:
+		return common.LeftPadBytes([]byte{0x01}, 32), nil
+	case 1:
+		return common.LeftPadBytes([]byte{0x00}, 32), nil
+	case 2:
+		return nil, errStarkInvalidSeal
+	default:
+		panic("unexpected error code")
+	}
 }
 
 // ECRECOVER implemented as a native contract.

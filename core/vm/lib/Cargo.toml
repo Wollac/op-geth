@@ -1,0 +1,11 @@
+[package]
+name = "stark_precompile"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "stark_verifier"
+crate-type = ["staticlib"]
+
+[dependencies]
+risc0-zkvm = { version = "0.21", default-features = false }
