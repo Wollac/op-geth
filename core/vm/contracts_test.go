@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,6 +58,8 @@ var allPrecompiles = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{8}):    &bn256PairingIstanbul{},
 	common.BytesToAddress([]byte{9}):    &blake2F{},
 	common.BytesToAddress([]byte{0x0a}): &kzgPointEvaluation{},
+
+	common.BytesToAddress([]byte{0x51}): &starkVerify{},
 
 	common.BytesToAddress([]byte{0x0f, 0x0a}): &bls12381G1Add{},
 	common.BytesToAddress([]byte{0x0f, 0x0b}): &bls12381G1Mul{},
@@ -273,6 +276,44 @@ func TestPrecompileBlake2FMalformedInput(t *testing.T) {
 }
 
 func TestPrecompiledEcrecover(t *testing.T) { testJson("ecRecover", "01", t) }
+
+func TestPrecompiledStarkVerify(t *testing.T) {
+	const (
+		preState     = "9def5fca26192918427b2f984f1f02571d4bad10dccca3ad238eedf9494d8682"
+		postState    = "2bc65f04e50703f236b71833701768fd8b92d23d97b97235af8df39f28ed9517"
+		input        = "0000000000000000000000000000000000000000000000000000000000000000"
+		journal      = "fb5e512425fc9449316ec95969ebe71e2d576dbab833d61e2a5b9330fd70ee02"
+		testDataPath = "testdata/precompiles/starkVerify.bin"
+	)
+
+	// Load the seal data
+	seal, err := os.ReadFile(testDataPath)
+	if err != nil {
+		t.Fatalf("Failed to load test data from %s: %v", testDataPath, err)
+	}
+
+	tests := []precompiledTest{
+		{
+			Name:     "valid receipt",
+			Input:    preState + postState + input + journal + common.Bytes2Hex(seal),
+			Gas:      1024,
+			Expected: "0000000000000000000000000000000000000000000000000000000000000001",
+		},
+		{
+			Name:     "invalid receipt",
+			Input:    strings.Repeat("00", 32) + postState + input + journal + common.Bytes2Hex(seal),
+			Gas:      1024,
+			Expected: "0000000000000000000000000000000000000000000000000000000000000000",
+		},
+	}
+
+	// Execute each test case
+	for _, tc := range tests {
+		t.Run(tc.Name, func(t *testing.T) {
+			testPrecompiled("0x51", tc, t)
+		})
+	}
+}
 
 func testJson(name, addr string, t *testing.T) {
 	tests, err := loadJson(name)
