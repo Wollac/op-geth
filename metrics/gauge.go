@@ -14,7 +14,10 @@ func (g GaugeSnapshot) Value() int64 { return int64(g) }
 // GetOrRegisterGauge returns an existing Gauge or constructs and registers a
 // new Gauge.
 func GetOrRegisterGauge(name string, r Registry) *Gauge {
-	return getOrRegister(name, NewGauge, r)
+	if r == nil {
+		r = DefaultRegistry
+	}
+	return r.GetOrRegister(name, func() any { return NewGauge() }).(*Gauge)
 }
 
 // NewGauge constructs a new Gauge.
@@ -45,12 +48,22 @@ func (g *Gauge) Update(v int64) {
 	(*atomic.Int64)(g).Store(v)
 }
 
+// OPStack addition
 // TryUpdate updates the gauge if the value is non-nil, converting it to int64.
 func (g *Gauge) TryUpdate(v *big.Int) {
 	if v == nil {
 		return
 	}
 	(*atomic.Int64)(g).Store(v.Int64())
+}
+
+// OPStack additon
+// TryUpdate updates the gauge if the value is non-nil, converting it to int64.
+func (g *Gauge) TryUpdateUint64(v *uint64) {
+	if v == nil {
+		return
+	}
+	(*atomic.Int64)(g).Store(int64(*v))
 }
 
 // UpdateIfGt updates the gauge's value if v is larger then the current value.

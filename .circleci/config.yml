@@ -8,7 +8,7 @@ orbs:
 parameters:
   go_version:
     type: string
-    default: 1.23.8 # update CI Go version here
+    default: 1.25.1 # update CI Go version here
 
 commands:
   gcp-oidc-authenticate:
@@ -53,39 +53,6 @@ commands:
             echo "export GOOGLE_APPLICATION_CREDENTIALS='<< parameters.gcp_cred_config_file_path >>'" | tee -a "$BASH_ENV"
 
 jobs:
-  build-and-deploy:
-    machine:
-      image: ubuntu-2004:current
-    steps:
-      - checkout
-      # Fetch more history for diffing
-      - run:
-          name: Fetch git history
-          command: |
-            git fetch --depth 1000
-
-      # Build forkdiff using Docker
-      - run:
-          name: Build forkdiff
-          command: |
-            docker run --volume $(pwd):/workspace \
-              protolambda/forkdiff:0.1.1 \
-              -repo=/workspace \
-              -fork=/workspace/fork.yaml \
-              -out=/workspace/index.html
-
-      # Prepare pages directory
-      - run:
-          name: Build pages
-          command: |
-            mkdir -p /tmp/pages
-            mv index.html /tmp/pages/index.html
-            touch /tmp/pages/.nojekyll
-            if [ "$CIRCLE_PROJECT_REPONAME" == "op-geth" ] && [ "$CIRCLE_PROJECT_USERNAME" == "ethereum-optimism" ]; then
-              echo "op-geth.optimism.io" > /tmp/pages/CNAME
-            fi
-      - utils/github-pages-deploy:
-          src-pages-dir: /tmp/pages
   docker-release:
     environment:
       DOCKER_BUILDKIT: 1
@@ -147,29 +114,6 @@ jobs:
                 name: Tag
                 command: |
                   ./.circleci/ci-docker-tag-op-geth-release.sh <<parameters.registry>>/<<parameters.repo>> $CIRCLE_TAG $CIRCLE_SHA1
-      - when:
-          condition:
-            equal: [optimism, << pipeline.git.branch >>]
-          steps:
-            - gcp-oidc-authenticate:
-                service_account_email: GCP_SERVICE_ATTESTOR_ACCOUNT_EMAIL
-            - run:
-                name: Sign
-                command: |
-                  git clone --branch v1.0.3 --depth 1 https://github.com/ethereum-optimism/binary_signer
-                  cd binary_signer/signer
-
-                  IMAGE_PATH="<<parameters.registry>>/<<parameters.repo>>/<<parameters.docker_name>>:<<pipeline.git.revision>>"
-                  echo $IMAGE_PATH
-                  pip3 install -r requirements.txt
-
-                  python3 ./sign_image.py --command="sign"\
-                      --attestor-project-name="$ATTESTOR_PROJECT_NAME"\
-                      --attestor-name="$ATTESTOR_NAME"\
-                      --image-path="$IMAGE_PATH"\
-                      --signer-logging-level="INFO"\
-                      --attestor-key-id="//cloudkms.googleapis.com/v1/projects/$ATTESTOR_PROJECT_NAME/locations/global/keyRings/$ATTESTOR_NAME-key-ring/cryptoKeys/$ATTESTOR_NAME-key/cryptoKeyVersions/1"
-
   build-geth:
     docker:
       - image: cimg/go:<<pipeline.parameters.go_version>>
@@ -194,6 +138,8 @@ jobs:
       - checkout
       - run:
           command: go run build/ci.go lint
+      - run:
+          command: go run build/ci.go check_generate
   tidy-geth:
     resource_class: small
     docker:
@@ -208,8 +154,8 @@ jobs:
     steps:
       - checkout
       - run:
-          name: install dasel
-          command: go install github.com/tomwright/dasel/v2/cmd/dasel@v2.8.1
+          name: install yq
+          command: go install github.com/mikefarah/yq/v4@v4.44.1
       - run:
           name: generate artifact and check diff
           command: |
@@ -247,11 +193,3 @@ workflows:
           push_tags: true
           context:
             - oplabs-gcr-release
-
-  merge:
-    jobs:
-      - build-and-deploy:
-          context: circleci-repo-op-geth
-          filters:
-            branches:
-              only: optimism

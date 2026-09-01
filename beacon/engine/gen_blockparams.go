@@ -21,6 +21,8 @@ func (p PayloadAttributes) MarshalJSON() ([]byte, error) {
 		SuggestedFeeRecipient common.Address      `json:"suggestedFeeRecipient" gencodec:"required"`
 		Withdrawals           []*types.Withdrawal `json:"withdrawals"`
 		BeaconRoot            *common.Hash        `json:"parentBeaconBlockRoot"`
+		SlotNumber            *hexutil.Uint64     `json:"slotNumber"`
+		TargetGasLimit        *hexutil.Uint64     `json:"targetGasLimit"`
 		Transactions          []hexutil.Bytes     `json:"transactions,omitempty"  gencodec:"optional"`
 		NoTxPool              bool                `json:"noTxPool,omitempty" gencodec:"optional"`
 		GasLimit              *hexutil.Uint64     `json:"gasLimit,omitempty" gencodec:"optional"`
@@ -33,6 +35,8 @@ func (p PayloadAttributes) MarshalJSON() ([]byte, error) {
 	enc.SuggestedFeeRecipient = p.SuggestedFeeRecipient
 	enc.Withdrawals = p.Withdrawals
 	enc.BeaconRoot = p.BeaconRoot
+	enc.SlotNumber = (*hexutil.Uint64)(p.SlotNumber)
+	enc.TargetGasLimit = (*hexutil.Uint64)(p.TargetGasLimit)
 	if p.Transactions != nil {
 		enc.Transactions = make([]hexutil.Bytes, len(p.Transactions))
 		for k, v := range p.Transactions {
@@ -54,6 +58,8 @@ func (p *PayloadAttributes) UnmarshalJSON(input []byte) error {
 		SuggestedFeeRecipient *common.Address     `json:"suggestedFeeRecipient" gencodec:"required"`
 		Withdrawals           []*types.Withdrawal `json:"withdrawals"`
 		BeaconRoot            *common.Hash        `json:"parentBeaconBlockRoot"`
+		SlotNumber            *hexutil.Uint64     `json:"slotNumber"`
+		TargetGasLimit        *hexutil.Uint64     `json:"targetGasLimit"`
 		Transactions          []hexutil.Bytes     `json:"transactions,omitempty"  gencodec:"optional"`
 		NoTxPool              *bool               `json:"noTxPool,omitempty" gencodec:"optional"`
 		GasLimit              *hexutil.Uint64     `json:"gasLimit,omitempty" gencodec:"optional"`
@@ -81,6 +87,12 @@ func (p *PayloadAttributes) UnmarshalJSON(input []byte) error {
 	}
 	if dec.BeaconRoot != nil {
 		p.BeaconRoot = dec.BeaconRoot
+	}
+	if dec.SlotNumber != nil {
+		p.SlotNumber = (*uint64)(dec.SlotNumber)
+	}
+	if dec.TargetGasLimit != nil {
+		p.TargetGasLimit = (*uint64)(dec.TargetGasLimit)
 	}
 	if dec.Transactions != nil {
 		p.Transactions = make([][]byte, len(dec.Transactions))

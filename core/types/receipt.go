@@ -86,15 +86,16 @@ type Receipt struct {
 	TransactionIndex uint        `json:"transactionIndex"`
 
 	// Optimism: extend receipts with L1 and operator fee info
-	L1GasPrice          *big.Int   `json:"l1GasPrice,omitempty"`          // Present from pre-bedrock. L1 Basefee after Bedrock
-	L1BlobBaseFee       *big.Int   `json:"l1BlobBaseFee,omitempty"`       // Always nil prior to the Ecotone hardfork
-	L1GasUsed           *big.Int   `json:"l1GasUsed,omitempty"`           // Present from pre-bedrock, deprecated as of Fjord
-	L1Fee               *big.Int   `json:"l1Fee,omitempty"`               // Present from pre-bedrock
-	FeeScalar           *big.Float `json:"l1FeeScalar,omitempty"`         // Present from pre-bedrock to Ecotone. Nil after Ecotone
-	L1BaseFeeScalar     *uint64    `json:"l1BaseFeeScalar,omitempty"`     // Always nil prior to the Ecotone hardfork
-	L1BlobBaseFeeScalar *uint64    `json:"l1BlobBaseFeeScalar,omitempty"` // Always nil prior to the Ecotone hardfork
-	OperatorFeeScalar   *uint64    `json:"operatorFeeScalar,omitempty"`   // Always nil prior to the Isthmus hardfork
-	OperatorFeeConstant *uint64    `json:"operatorFeeConstant,omitempty"` // Always nil prior to the Isthmus hardfork
+	L1GasPrice           *big.Int   `json:"l1GasPrice,omitempty"`           // Present from pre-bedrock. L1 Basefee after Bedrock
+	L1BlobBaseFee        *big.Int   `json:"l1BlobBaseFee,omitempty"`        // Always nil prior to the Ecotone hardfork
+	L1GasUsed            *big.Int   `json:"l1GasUsed,omitempty"`            // Present from pre-bedrock, deprecated as of Fjord
+	L1Fee                *big.Int   `json:"l1Fee,omitempty"`                // Present from pre-bedrock
+	FeeScalar            *big.Float `json:"l1FeeScalar,omitempty"`          // Present from pre-bedrock to Ecotone. Nil after Ecotone
+	L1BaseFeeScalar      *uint64    `json:"l1BaseFeeScalar,omitempty"`      // Always nil prior to the Ecotone hardfork
+	L1BlobBaseFeeScalar  *uint64    `json:"l1BlobBaseFeeScalar,omitempty"`  // Always nil prior to the Ecotone hardfork
+	OperatorFeeScalar    *uint64    `json:"operatorFeeScalar,omitempty"`    // Always nil prior to the Isthmus hardfork
+	OperatorFeeConstant  *uint64    `json:"operatorFeeConstant,omitempty"`  // Always nil prior to the Isthmus hardfork
+	DAFootprintGasScalar *uint64    `json:"daFootprintGasScalar,omitempty"` // Always nil prior to the Jovian hardfork
 }
 
 type receiptMarshaling struct {
@@ -121,6 +122,7 @@ type receiptMarshaling struct {
 	DepositReceiptVersion *hexutil.Uint64
 	OperatorFeeScalar     *hexutil.Uint64
 	OperatorFeeConstant   *hexutil.Uint64
+	DAFootprintGasScalar  *hexutil.Uint64
 }
 
 // receiptRLP is the consensus encoding of a receipt.
@@ -167,10 +169,15 @@ type LegacyOptimismStoredReceiptRLP struct {
 	PostStateOrStatus []byte
 	CumulativeGasUsed uint64
 	Logs              []*LogForStorage
-	L1GasUsed         *big.Int
-	L1GasPrice        *big.Int
-	L1Fee             *big.Int
-	FeeScalar         string
+
+	// Remaining fields are declared to allow the receipt RLP to be parsed without errors.
+	// However, they must not be used as they may not be populated correctly due to multiple receipt formats
+	// being combined into a single list of optional fields which can be mistaken for each other.
+	// DepositNonce (*uint64) from Regolith deposit tx receipts will be parsed into L1GasUsed
+	L1GasUsed  *big.Int `rlp:"optional"` // OVM Legacy
+	L1GasPrice *big.Int `rlp:"optional"` // OVM Legacy
+	L1Fee      *big.Int `rlp:"optional"` // OVM Legacy
+	FeeScalar  string   `rlp:"optional"` // OVM Legacy
 }
 
 // LogForStorage is a wrapper around a Log that handles
@@ -334,7 +341,7 @@ func (r *Receipt) decodeTyped(b []byte) error {
 		return errShortTypedReceipt
 	}
 	switch b[0] {
-	case DynamicFeeTxType, AccessListTxType, BlobTxType, SetCodeTxType:
+	case DynamicFeeTxType, AccessListTxType, BlobTxType, SetCodeTxType, PostExecTxType:
 		var data receiptRLP
 		err := rlp.DecodeBytes(b[1:], &data)
 		if err != nil {
@@ -567,7 +574,7 @@ func (rs Receipts) EncodeIndex(i int, w *bytes.Buffer) {
 	}
 	w.WriteByte(r.Type)
 	switch r.Type {
-	case AccessListTxType, DynamicFeeTxType, BlobTxType, SetCodeTxType:
+	case AccessListTxType, DynamicFeeTxType, BlobTxType, SetCodeTxType, PostExecTxType:
 		rlp.Encode(w, data)
 	case DepositTxType:
 		if r.DepositReceiptVersion != nil {
@@ -612,26 +619,8 @@ func (rs Receipts) DeriveFields(config *params.ChainConfig, blockHash common.Has
 		logIndex += uint(len(rs[i].Logs))
 	}
 
-	if config.Optimism != nil && len(txs) >= 2 && config.IsBedrock(new(big.Int).SetUint64(blockNumber)) {
-		gasParams, err := extractL1GasParams(config, blockTime, txs[0].Data())
-		if err != nil {
-			return err
-		}
-		for i := 0; i < len(rs); i++ {
-			if txs[i].IsDepositTx() {
-				continue
-			}
-			rs[i].L1GasPrice = gasParams.l1BaseFee
-			rs[i].L1BlobBaseFee = gasParams.l1BlobBaseFee
-			rs[i].L1Fee, rs[i].L1GasUsed = gasParams.costFunc(txs[i].RollupCostData())
-			rs[i].FeeScalar = gasParams.feeScalar
-			rs[i].L1BaseFeeScalar = u32ptrTou64ptr(gasParams.l1BaseFeeScalar)
-			rs[i].L1BlobBaseFeeScalar = u32ptrTou64ptr(gasParams.l1BlobBaseFeeScalar)
-			if gasParams.operatorFeeScalar != nil && gasParams.operatorFeeConstant != nil && (*gasParams.operatorFeeScalar != 0 || *gasParams.operatorFeeConstant != 0) {
-				rs[i].OperatorFeeScalar = u32ptrTou64ptr(gasParams.operatorFeeScalar)
-				rs[i].OperatorFeeConstant = gasParams.operatorFeeConstant
-			}
-		}
+	if config.IsOptimismBedrock(new(big.Int).SetUint64(blockNumber)) && len(txs) >= 2 {
+		return rs.deriveOPStackFields(config, blockTime, txs)
 	}
 	return nil
 }
@@ -654,10 +643,32 @@ func EncodeBlockReceiptLists(receipts []Receipts) []rlp.RawValue {
 	return result
 }
 
-func u32ptrTou64ptr(a *uint32) *uint64 {
-	if a == nil {
-		return nil
+// SlimReceipt is a wrapper around a Receipt with RLP serialization that omits
+// the Bloom field and includes the tx type. Used for era files.
+type SlimReceipt Receipt
+
+type slimReceiptRLP struct {
+	Type              uint8
+	StatusEncoding    []byte
+	CumulativeGasUsed uint64
+	Logs              []*Log
+}
+
+// EncodeRLP implements rlp.Encoder, encoding the receipt as
+// [tx-type, post-state-or-status, cumulative-gas, logs].
+func (r *SlimReceipt) EncodeRLP(w io.Writer) error {
+	data := &slimReceiptRLP{r.Type, (*Receipt)(r).statusEncoding(), r.CumulativeGasUsed, r.Logs}
+	return rlp.Encode(w, data)
+}
+
+// DecodeRLP implements rlp.Decoder.
+func (r *SlimReceipt) DecodeRLP(s *rlp.Stream) error {
+	var data slimReceiptRLP
+	if err := s.Decode(&data); err != nil {
+		return err
 	}
-	b := uint64(*a)
-	return &b
+	r.Type = data.Type
+	r.CumulativeGasUsed = data.CumulativeGasUsed
+	r.Logs = data.Logs
+	return (*Receipt)(r).setStatus(data.StatusEncoding)
 }

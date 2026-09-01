@@ -233,6 +233,9 @@ func (db *Database) DeleteRange(start, end []byte) error {
 			return err
 		}
 	}
+	if err := it.Error(); err != nil {
+		return err
+	}
 	return batch.Write()
 }
 
@@ -514,6 +517,9 @@ func (b *batch) Reset() {
 func (b *batch) Replay(w ethdb.KeyValueWriter) error {
 	return b.b.Replay(&replayer{writer: w})
 }
+
+// Close closes the batch and releases all associated resources.
+func (b *batch) Close() {}
 
 // replayer is a small wrapper to implement the correct replay methods.
 type replayer struct {

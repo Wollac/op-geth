@@ -69,7 +69,7 @@ func (t *Trie) Prove(key []byte, proofDb ethdb.KeyValueWriter) error {
 			// loaded blob will be tracked, while it's not required here since
 			// all loaded nodes won't be linked to trie at all and track nodes
 			// may lead to out-of-memory issue.
-			blob, err := t.reader.node(prefix, common.BytesToHash(n))
+			blob, err := t.reader.Node(prefix, common.BytesToHash(n))
 			if err != nil {
 				log.Error("Unhandled trie error in Trie.Prove", "err", err)
 				return err
@@ -454,7 +454,7 @@ func hasRightElement(node node, key []byte) bool {
 //
 // The firstKey is paired with firstProof, not necessarily the same as keys[0]
 // (unless firstProof is an existent proof). Similarly, lastKey and lastProof
-// are paired.
+// are paired. The firstKey should be less than or equal to all keys in the list.
 //
 // Expect the normal case, this function can also be used to verify the following
 // range proofs:
@@ -520,9 +520,14 @@ func VerifyRangeProof(rootHash common.Hash, firstKey []byte, keys [][]byte, valu
 		}
 		return false, nil
 	}
-	var lastKey = keys[len(keys)-1]
+	// Short circuit if the key of first element is greater than firstKey.
+	// A nil firstKey slice is equivalent to an empty slice.
+	if bytes.Compare(firstKey, keys[0]) > 0 {
+		return false, errors.New("unexpected key-value pairs preceding the requested range")
+	}
 	// Special case, there is only one element and two edge keys are same.
 	// In this case, we can't construct two edge paths. So handle it here.
+	var lastKey = keys[len(keys)-1]
 	if len(keys) == 1 && bytes.Equal(firstKey, lastKey) {
 		root, val, err := proofToPath(rootHash, nil, firstKey, proof, false)
 		if err != nil {
@@ -567,12 +572,19 @@ func VerifyRangeProof(rootHash common.Hash, firstKey []byte, keys [][]byte, valu
 	}
 	// Rebuild the trie with the leaf stream, the shape of trie
 	// should be same with the original one.
-	tr := &Trie{root: root, reader: newEmptyReader(), tracer: newTracer()}
+	tr := &Trie{
+		root:           root,
+		reader:         newEmptyReader(),
+		opTracer:       newOpTracer(),
+		prevalueTracer: NewPrevalueTracer(),
+	}
 	if empty {
 		tr.root = nil
 	}
 	for index, key := range keys {
-		tr.Update(key, values[index])
+		if err := tr.Update(key, values[index]); err != nil {
+			return false, err
+		}
 	}
 	if tr.Hash() != rootHash {
 		return false, fmt.Errorf("invalid proof, want hash %x, got %x", rootHash, tr.Hash())

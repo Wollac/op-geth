@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -62,6 +61,23 @@ func Estimate(ctx context.Context, call *core.Message, opts *Options, gasCap uin
 	if call.GasLimit >= params.TxGas {
 		hi = call.GasLimit
 	}
+
+	// Cap the maximum gas allowance according to EIP-7825 if the estimation targets Osaka
+	if hi > params.MaxTxGas {
+		blockNumber, blockTime := opts.Header.Number, opts.Header.Time
+		if opts.BlockOverrides != nil {
+			if opts.BlockOverrides.Number != nil {
+				blockNumber = opts.BlockOverrides.Number.ToInt()
+			}
+			if opts.BlockOverrides.Time != nil {
+				blockTime = uint64(*opts.BlockOverrides.Time)
+			}
+		}
+		if opts.Config.IsOsaka(blockNumber, blockTime) {
+			hi = params.MaxTxGas
+		}
+	}
+
 	// Normalize the max fee per gas the call is willing to spend.
 	var feeCap *big.Int
 	if call.GasFeeCap != nil {
@@ -209,6 +225,9 @@ func execute(ctx context.Context, call *core.Message, opts *Options, gasLimit ui
 		if errors.Is(err, core.ErrIntrinsicGas) {
 			return true, nil, nil // Special case, raise gas limit
 		}
+		if errors.Is(err, core.ErrGasLimitTooHigh) {
+			return true, nil, nil // Special case, lower gas limit
+		}
 		return true, nil, err // Bail out
 	}
 	return result.Failed(), result, nil
@@ -248,7 +267,7 @@ func run(ctx context.Context, call *core.Message, opts *Options) (*core.Executio
 		evm.Cancel()
 	}()
 	// Execute the call, returning a wrapped error or the result
-	result, err := core.ApplyMessage(evm, call, new(core.GasPool).AddGas(math.MaxUint64))
+	result, err := core.ApplyMessage(evm, call, nil)
 	if vmerr := dirtyState.Error(); vmerr != nil {
 		return nil, vmerr
 	}

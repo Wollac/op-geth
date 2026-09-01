@@ -37,6 +37,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/filtermaps"
+	"github.com/ethereum/go-ethereum/core/history"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state/pruner"
 	"github.com/ethereum/go-ethereum/core/txpool"
@@ -64,6 +65,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/dnsdisc"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/netutil"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -189,7 +191,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 
 	// Here we determine genesis hash and active ChainConfig.
 	// We need these to figure out the consensus parameters and to set up history pruning.
-	chainConfig, _, err := core.LoadChainConfig(chainDb, config.Genesis)
+	chainConfig, genesisHash, err := core.LoadChainConfig(chainDb, config.Genesis)
 	if err != nil {
 		return nil, err
 	}
@@ -236,19 +238,25 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			rawdb.WriteDatabaseVersion(chainDb, core.BlockChainVersion)
 		}
 	}
+	histPolicy, err := history.NewPolicy(config.HistoryMode, genesisHash)
+	if err != nil {
+		return nil, err
+	}
 	var (
 		options = &core.BlockChainConfig{
-			TrieCleanLimit:   config.TrieCleanCache,
-			NoPrefetch:       config.NoPrefetch,
-			TrieDirtyLimit:   config.TrieDirtyCache,
-			ArchiveMode:      config.NoPruning,
-			TrieTimeLimit:    config.TrieTimeout,
-			SnapshotLimit:    config.SnapshotCache,
-			Preimages:        config.Preimages,
-			StateHistory:     config.StateHistory,
-			StateScheme:      scheme,
-			ChainHistoryMode: config.HistoryMode,
-			TxLookupLimit:    int64(min(config.TransactionHistory, math.MaxInt64)),
+			TrieCleanLimit:          config.TrieCleanCache,
+			NoPrefetch:              config.NoPrefetch,
+			TrieDirtyLimit:          config.TrieDirtyCache,
+			ArchiveMode:             config.NoPruning,
+			TrieTimeLimit:           config.TrieTimeout,
+			SnapshotLimit:           config.SnapshotCache,
+			Preimages:               config.Preimages,
+			StateHistory:            config.StateHistory,
+			TrienodeHistory:         config.TrienodeHistory,
+			NodeFullValueCheckpoint: config.NodeFullValueCheckpoint,
+			StateScheme:             scheme,
+			HistoryPolicy:           histPolicy,
+			TxLookupLimit:           int64(min(config.TransactionHistory, math.MaxInt64)),
 			VmConfig: vm.Config{
 				EnablePreimageRecording: config.EnablePreimageRecording,
 			},
@@ -257,6 +265,11 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			// - DATADIR/triedb/merkle.journal
 			// - DATADIR/triedb/verkle.journal
 			TrieJournalDirectory: stack.ResolvePath("triedb"),
+			StateSizeTracking:    config.EnableStateSizeTracking,
+			SlowBlockThreshold:   config.SlowBlockThreshold,
+
+			StatelessSelfValidation: config.StatelessSelfValidation,
+			EnableWitnessStats:      config.EnableWitnessStats,
 		}
 	)
 	if config.VMTrace != "" {
@@ -274,6 +287,12 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	var overrides core.ChainOverrides
 	if config.OverrideOsaka != nil {
 		overrides.OverrideOsaka = config.OverrideOsaka
+	}
+	if config.OverrideBPO1 != nil {
+		overrides.OverrideBPO1 = config.OverrideBPO1
+	}
+	if config.OverrideBPO2 != nil {
+		overrides.OverrideBPO2 = config.OverrideBPO2
 	}
 	if config.OverrideVerkle != nil {
 		overrides.OverrideVerkle = config.OverrideVerkle
@@ -298,6 +317,9 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 	if config.OverrideOptimismJovian != nil {
 		overrides.OverrideOptimismJovian = config.OverrideOptimismJovian
+	}
+	if config.OverrideOptimismKarst != nil {
+		overrides.OverrideOptimismKarst = config.OverrideOptimismKarst
 	}
 	if config.OverrideOptimismInterop != nil {
 		overrides.OverrideOptimismInterop = config.OverrideOptimismInterop
@@ -379,6 +401,11 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		stack.RegisterLifecycle(pj)
 	}
 
+	txGossipNetRestrict, err := parseTxGossipNetRestrict(config.RollupTxPoolNetrestrict)
+	if err != nil {
+		return nil, err
+	}
+
 	// Permit the downloader to use the trie cache allowance during fast sync
 	cacheLimit := options.TrieCleanLimit + options.TrieDirtyLimit + options.SnapshotLimit
 	if eth.handler, err = newHandler(&handlerConfig{
@@ -391,7 +418,11 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		BloomCache:     uint64(cacheLimit),
 		EventMux:       eth.eventMux,
 		RequiredBlocks: config.RequiredBlocks,
-		NoTxGossip:     config.RollupDisableTxPoolGossip,
+
+		// OP Stack additions
+		NoTxGossip:               config.RollupDisableTxPoolGossip,
+		TxGossipNetRestrict:      txGossipNetRestrict,
+		TxGossipTrustedPeersOnly: config.RollupTxPoolTrustedPeersOnly,
 	}); err != nil {
 		return nil, err
 	}
@@ -580,7 +611,6 @@ func (s *Ethereum) updateFilterMapsHeads() {
 			head = newHead
 			chainView := s.newChainView(head)
 			if chainView == nil {
-				log.Warn("FilterMaps chain view is nil, not updating")
 				return
 			}
 			historyCutoff, _ := s.blockchain.HistoryPruningCutoff()
@@ -695,32 +725,6 @@ func (s *Ethereum) Stop() error {
 	return nil
 }
 
-// SyncMode retrieves the current sync mode, either explicitly set, or derived
-// from the chain status.
-func (s *Ethereum) SyncMode() ethconfig.SyncMode {
-	// If we're in snap sync mode, return that directly
-	if s.handler.snapSync.Load() {
-		return ethconfig.SnapSync
-	}
-	// We are probably in full sync, but we might have rewound to before the
-	// snap sync pivot, check if we should re-enable snap sync.
-	head := s.blockchain.CurrentBlock()
-	if pivot := rawdb.ReadLastPivotNumber(s.chainDb); pivot != nil {
-		if head.Number.Uint64() < *pivot {
-			return ethconfig.SnapSync
-		}
-	}
-	// We are in a full sync, but the associated head state is missing. To complete
-	// the head state, forcefully rerun the snap sync. Note it doesn't mean the
-	// persistent state is corrupted, just mismatch with the head block.
-	if !s.blockchain.HasState(head.Root) {
-		log.Info("Reenabled snap sync as chain is stateless")
-		return ethconfig.SnapSync
-	}
-	// Nope, we're really full syncing
-	return ethconfig.FullSync
-}
-
 // HandleRequiredProtocolVersion handles the protocol version signal. This implements opt-in halting,
 // the protocol version data is already logged and metered when signaled through the Engine API.
 func (s *Ethereum) HandleRequiredProtocolVersion(required params.ProtocolVersion) error {
@@ -749,4 +753,16 @@ func (s *Ethereum) HandleRequiredProtocolVersion(required params.ProtocolVersion
 		return s.nodeCloser()
 	}
 	return nil
+}
+
+// parseTxGossipNetRestrict parses the netrestrict string for txpool gossip
+func parseTxGossipNetRestrict(netrestrict string) (*netutil.Netlist, error) {
+	if netrestrict == "" {
+		return nil, nil
+	}
+	list, err := netutil.ParseNetlist(netrestrict)
+	if err != nil {
+		return nil, fmt.Errorf("invalid txpool gossip netrestrict list: %w", err)
+	}
+	return list, nil
 }

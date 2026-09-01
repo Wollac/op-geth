@@ -29,14 +29,15 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/holiman/uint256"
 )
 
 var (
 	ErrInvalidSig           = errors.New("invalid transaction v, r, s values")
 	ErrUnexpectedProtection = errors.New("transaction type does not supported EIP-155 protected signatures")
-	ErrInvalidTxType        = errors.New("transaction type not valid in this context")
 	ErrTxTypeNotSupported   = errors.New("transaction type not supported")
 	ErrGasFeeCapTooLow      = errors.New("fee cap less than base fee")
+	ErrUint256Overflow      = errors.New("bigint overflow, too large for uint256")
 	errShortTypedTx         = errors.New("typed transaction too short")
 	errInvalidYParity       = errors.New("'yParity' field must be 0 or 1")
 	errVYParityMismatch     = errors.New("'v' and 'yParity' fields do not match")
@@ -222,6 +223,8 @@ func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 		inner = new(BlobTx)
 	case SetCodeTxType:
 		inner = new(SetCodeTx)
+	case PostExecTxType:
+		inner = new(PostExecTx)
 	case DepositTxType:
 		inner = new(DepositTx)
 	default:
@@ -379,11 +382,15 @@ func (tx *Transaction) IsSystemTx() bool {
 
 // Cost returns (gas * gasPrice) + (blobGas * blobGasPrice) + value.
 func (tx *Transaction) Cost() *big.Int {
-	total := new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
-	if tx.Type() == BlobTxType {
-		total.Add(total, new(big.Int).Mul(tx.BlobGasFeeCap(), new(big.Int).SetUint64(tx.BlobGas())))
+	// Avoid allocating copies via tx.GasPrice()/tx.Value(); use inner values directly.
+	total := new(big.Int).SetUint64(tx.inner.gas())
+	total.Mul(total, tx.inner.gasPrice())
+	if blobtx, ok := tx.inner.(*BlobTx); ok {
+		tmp := new(big.Int).SetUint64(blobtx.blobGas())
+		tmp.Mul(tmp, blobtx.BlobFeeCap.ToBig())
+		total.Add(total, tmp)
 	}
-	total.Add(total, tx.Value())
+	total.Add(total, tx.inner.value())
 	return total
 }
 
@@ -452,59 +459,93 @@ func (tx *Transaction) GasTipCapIntCmp(other *big.Int) int {
 }
 
 // EffectiveGasTip returns the effective miner gasTipCap for the given base fee.
-// Note: if the effective gasTipCap is negative, this method returns both error
-// the actual negative value, _and_ ErrGasFeeCapTooLow
+// Note: if the effective gasTipCap would be negative, this method
+// returns ErrGasFeeCapTooLow, and value is undefined.
 func (tx *Transaction) EffectiveGasTip(baseFee *big.Int) (*big.Int, error) {
-	dst := new(big.Int)
-	err := tx.calcEffectiveGasTip(dst, baseFee)
-	return dst, err
+	dst := new(uint256.Int)
+	base := new(uint256.Int)
+	if baseFee != nil {
+		if base.SetFromBig(baseFee) {
+			return nil, ErrUint256Overflow
+		}
+	}
+	err := tx.calcEffectiveGasTip(dst, base)
+	return dst.ToBig(), err
 }
 
 // calcEffectiveGasTip calculates the effective gas tip of the transaction and
 // saves the result to dst.
-func (tx *Transaction) calcEffectiveGasTip(dst *big.Int, baseFee *big.Int) error {
+func (tx *Transaction) calcEffectiveGasTip(dst *uint256.Int, baseFee *uint256.Int) error {
 	if tx.Type() == DepositTxType {
-		dst.Set(common.Big0)
+		dst.Set(uint256.NewInt(0))
 		return nil
 	}
-
 	if baseFee == nil {
-		dst.Set(tx.inner.gasTipCap())
+		if dst.SetFromBig(tx.inner.gasTipCap()) {
+			return ErrUint256Overflow
+		}
 		return nil
 	}
 
 	var err error
-	gasFeeCap := tx.inner.gasFeeCap()
-	if gasFeeCap.Cmp(baseFee) < 0 {
+	if dst.SetFromBig(tx.inner.gasFeeCap()) {
+		return ErrUint256Overflow
+	}
+	if dst.Cmp(baseFee) < 0 {
 		err = ErrGasFeeCapTooLow
 	}
 
-	dst.Sub(gasFeeCap, baseFee)
-	gasTipCap := tx.inner.gasTipCap()
+	dst.Sub(dst, baseFee)
+	gasTipCap := new(uint256.Int)
+	if gasTipCap.SetFromBig(tx.inner.gasTipCap()) {
+		return ErrUint256Overflow
+	}
 	if gasTipCap.Cmp(dst) < 0 {
 		dst.Set(gasTipCap)
 	}
 	return err
 }
 
-// EffectiveGasTipCmp compares the effective gasTipCap of two transactions assuming the given base fee.
-func (tx *Transaction) EffectiveGasTipCmp(other *Transaction, baseFee *big.Int) int {
+// EffectiveGasTipValue returns the effective gasTip value for the given base fee,
+// even if it would be negative. This can be used for sorting purposes.
+func (tx *Transaction) EffectiveGasTipValue(baseFee *big.Int) *big.Int {
+	// min(gasTipCap, gasFeeCap - baseFee)
+	dst := new(big.Int)
+	if baseFee == nil {
+		dst.Set(tx.inner.gasTipCap())
+		return dst
+	}
+
+	dst.Sub(tx.inner.gasFeeCap(), baseFee) // gasFeeCap - baseFee
+	gasTipCap := tx.inner.gasTipCap()
+	if gasTipCap.Cmp(dst) < 0 { // gasTipCap < (gasFeeCap - baseFee)
+		dst.Set(gasTipCap)
+	}
+	return dst
+}
+
+func (tx *Transaction) EffectiveGasTipCmp(other *Transaction, baseFee *uint256.Int) int {
 	if baseFee == nil {
 		return tx.GasTipCapCmp(other)
 	}
 	// Use more efficient internal method.
-	txTip, otherTip := new(big.Int), new(big.Int)
-	tx.calcEffectiveGasTip(txTip, baseFee)
-	other.calcEffectiveGasTip(otherTip, baseFee)
+	txTip, otherTip := new(uint256.Int), new(uint256.Int)
+	err1 := tx.calcEffectiveGasTip(txTip, baseFee)
+	err2 := other.calcEffectiveGasTip(otherTip, baseFee)
+	if err1 != nil || err2 != nil {
+		// fall back to big int comparison in case of error
+		base := baseFee.ToBig()
+		return tx.EffectiveGasTipValue(base).Cmp(other.EffectiveGasTipValue(base))
+	}
 	return txTip.Cmp(otherTip)
 }
 
 // EffectiveGasTipIntCmp compares the effective gasTipCap of a transaction to the given gasTipCap.
-func (tx *Transaction) EffectiveGasTipIntCmp(other *big.Int, baseFee *big.Int) int {
+func (tx *Transaction) EffectiveGasTipIntCmp(other *uint256.Int, baseFee *uint256.Int) int {
 	if baseFee == nil {
-		return tx.GasTipCapIntCmp(other)
+		return tx.GasTipCapIntCmp(other.ToBig())
 	}
-	txTip := new(big.Int)
+	txTip := new(uint256.Int)
 	tx.calcEffectiveGasTip(txTip, baseFee)
 	return txTip.Cmp(other)
 }
@@ -659,9 +700,14 @@ func (tx *Transaction) Hash() common.Hash {
 	}
 
 	var h common.Hash
-	if tx.Type() == LegacyTxType {
+	switch tx.Type() {
+	case LegacyTxType:
 		h = rlpHash(tx.inner)
-	} else {
+	case PostExecTxType:
+		// Canonical encoding is 0x7D || Data (not RLP of the inner struct); hash that, like every
+		// other typed tx.
+		h = crypto.Keccak256Hash([]byte{PostExecTxType}, tx.Data())
+	default:
 		h = prefixedRlpHash(tx.Type(), tx.inner)
 	}
 	tx.hash.Store(&h)
@@ -751,7 +797,7 @@ func TxDifference(a, b Transactions) Transactions {
 func HashDifference(a, b []common.Hash) []common.Hash {
 	keep := make([]common.Hash, 0, len(a))
 
-	remove := make(map[common.Hash]struct{})
+	remove := make(map[common.Hash]struct{}, len(b))
 	for _, hash := range b {
 		remove[hash] = struct{}{}
 	}

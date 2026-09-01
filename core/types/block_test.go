@@ -250,6 +250,39 @@ func TestEIP4844BlockEncoding(t *testing.T) {
 	}
 }
 
+func TestAmsterdamHeaderRLPRoundTrip(t *testing.T) {
+	slotNumber := uint64(1)
+	blockAccessListHash := EmptyBlockAccessListHash
+	withdrawalsHash := EmptyRootHash
+	blobGasUsed := uint64(0)
+	excessBlobGas := uint64(0)
+	parentBeaconRoot := common.Hash{}
+	requestsHash := EmptyRequestsHash
+	header := &Header{
+		Difficulty:          new(big.Int),
+		Number:              big.NewInt(1),
+		BaseFee:             big.NewInt(1),
+		WithdrawalsHash:     &withdrawalsHash,
+		BlobGasUsed:         &blobGasUsed,
+		ExcessBlobGas:       &excessBlobGas,
+		ParentBeaconRoot:    &parentBeaconRoot,
+		RequestsHash:        &requestsHash,
+		SlotNumber:          &slotNumber,
+		BlockAccessListHash: &blockAccessListHash,
+	}
+	encoded, err := rlp.EncodeToBytes(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Header
+	if err := rlp.DecodeBytes(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if header.Hash() != decoded.Hash() {
+		t.Fatalf("header hash mismatch: have %s, want %s", decoded.Hash(), header.Hash())
+	}
+}
+
 func TestUncleHash(t *testing.T) {
 	uncles := make([]*Header, 0)
 	h := CalcUncleHash(uncles)
@@ -263,9 +296,8 @@ var benchBuffer = bytes.NewBuffer(make([]byte, 0, 32000))
 
 func BenchmarkEncodeBlock(b *testing.B) {
 	block := makeBenchBlock()
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		benchBuffer.Reset()
 		if err := rlp.Encode(benchBuffer, block); err != nil {
 			b.Fatal(err)
